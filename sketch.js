@@ -271,6 +271,9 @@ function stampWord() {
 
     text(word, 0, 0);
     pop();
+
+    // Reactive voice for chaos mode too
+    scheduleWordSpeech(word);
   }
 }
 
@@ -317,12 +320,10 @@ function keyPressed() {
 function togglePlayback() {
   if (song.isPlaying()) {
     song.pause();
-    clearInterval(speechInterval);
-    clearInterval(speechInterval2);
-    clearInterval(speechInterval3);
+    // No more scheduled intervals to clear - voice is now reactive
   } else {
     song.loop();
-    startSpeechSchedule();
+    startSpeechSchedule(); // Just logs that reactive voice is active
   }
 }
 
@@ -338,32 +339,22 @@ function toggleChantMode() {
 }
 
 function startSpeechSchedule() {
-  if (speechEnabled) {
-    // Primary voice - every 12 beats (3 bars) for less repetition
-    speechInterval = setInterval(() => {
-      speakWord();
-    }, beatInterval * 12);
-
-    // Secondary voice - every 20 beats, offset by 8 beats
-    setTimeout(() => {
-      speechInterval2 = setInterval(() => {
-        speakWord(0.6, 0.5); // Lower pitch, moderate volume
-      }, beatInterval * 20);
-    }, beatInterval * 8); // 8-beat offset
-
-    // Removed third voice to reduce repetition
-  }
+  // Voice is now reactive - no scheduled intervals needed
+  // Words will be spoken as they appear on screen
+  console.log('Reactive voice system active - words will be spoken as they appear');
 }
 
-function speakWord(customRate = 0.8, customVolume = 0.7) {
+function speakWord(customRate = 0.8, customVolume = 0.7, specificWord = null) {
   if (!speechEnabled || !('speechSynthesis' in window)) return;
 
   let word;
 
-  // Use on-screen words in lyric mode, random words in chaos mode
-  if (lyricMode && onScreenWords.length > 0) {
-    // Recite from visible words
-    word = random(onScreenWords.slice(-20)); // Use recent visible words
+  // Use the specific word if provided, otherwise use reactive selection
+  if (specificWord) {
+    word = specificWord;
+  } else if (lyricMode && onScreenWords.length > 0) {
+    // Use most recent word for reactive speech
+    word = onScreenWords[onScreenWords.length - 1];
   } else {
     word = random(words);
   }
@@ -570,29 +561,24 @@ function drawVerseBlocks() {
   textSize(16);
   text("RUDIMENTARY MAGITS", width/2, block.y - 30);
 
-  // Draw words in verse format - explicit line-by-line drawing
+  // Draw words individually - each word on its own line
   fill(255);
-  textAlign(LEFT, TOP);
+  textAlign(CENTER, TOP);
   textSize(fontSize);
 
   let startY = block.y + 40;
-  let lineHeight = fontSize + 15;
-  let wordsPerLine = 3;
-  let leftMargin = block.x + 20;
+  let lineHeight = fontSize + 18; // More spacing between lines
+  let centerX = block.x + block.width/2;
 
-  // Draw each line explicitly
-  for (let i = 0; i < block.words.length; i += wordsPerLine) {
-    let currentLineY = startY + (Math.floor(i / wordsPerLine) * lineHeight);
+  // Draw each word on its own line
+  for (let i = 0; i < block.words.length; i++) {
+    let wordY = startY + (i * lineHeight);
 
     // Stop if we exceed the block height
-    if (currentLineY + lineHeight > block.y + block.height - 20) break;
+    if (wordY + lineHeight > block.y + block.height - 30) break;
 
-    let lineWords = block.words.slice(i, i + wordsPerLine);
-    let lineText = lineWords.join("  ·  ");
-
-    // Center the line within the block
-    textAlign(CENTER, TOP);
-    text(lineText, block.x + block.width/2, currentLineY);
+    // Draw each word centered on its own line
+    text(block.words[i], centerX, wordY);
   }
 
   pop();
@@ -612,9 +598,34 @@ function addToVerseBlock(word) {
   }
 
   // Limit total words in block
-  if (currentBlock.words.length > 60) {
+  if (currentBlock.words.length > 20) {
     currentBlock.words.shift(); // Remove oldest words
   }
+
+  // Reactive voice - speak this word on the next beat
+  scheduleWordSpeech(word);
+}
+
+// Schedule word to be spoken on the next beat
+function scheduleWordSpeech(word) {
+  if (!speechEnabled || !song.isPlaying()) return;
+
+  // Calculate time to next beat (4/4 time - every beat)
+  let songTime = song.currentTime() * 1000;
+  let currentBeat = Math.floor(songTime / beatInterval);
+  let nextBeatTime = (currentBeat + 1) * beatInterval;
+  let timeToNextBeat = nextBeatTime - songTime;
+
+  // Ensure minimum delay
+  if (timeToNextBeat < 100) {
+    nextBeatTime += beatInterval; // Skip to next beat if too close
+    timeToNextBeat += beatInterval;
+  }
+
+  // Schedule speech for the next beat
+  setTimeout(() => {
+    speakWord(null, null, word); // Pass the specific word
+  }, timeToNextBeat);
 }
 
 // Word categorization for content-aware speech
