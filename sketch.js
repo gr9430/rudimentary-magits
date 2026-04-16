@@ -359,23 +359,72 @@ function speakWord(customRate = 0.8, customVolume = 0.7, specificWord = null) {
     word = random(words);
   }
 
-  // Apply content-aware speech characteristics
+  // Apply content-aware speech characteristics with more natural settings
   let category = categorizeWord(word);
   let speechParams = getSpeechParams(category);
 
   let utterance = new SpeechSynthesisUtterance(word);
   utterance.rate = speechParams.rate || customRate;
   utterance.pitch = speechParams.pitch || 0.5;
-  utterance.volume = speechParams.volume || customVolume;
+  utterance.volume = (speechParams.volume || customVolume) * 0.8; // Reduce overall volume
 
-  // Add voice selection based on category
-  if (speechParams.voice && speechSynthesis.getVoices().length > 0) {
+  // Select more natural voices and add reverb effect
+  if (speechSynthesis.getVoices().length > 0) {
     let voices = speechSynthesis.getVoices();
-    let selectedVoice = voices.find(v => v.name.includes(speechParams.voice)) || voices[0];
-    utterance.voice = selectedVoice;
+
+    // Prefer more natural-sounding voices
+    let naturalVoice = voices.find(v =>
+      v.name.includes('Natural') ||
+      v.name.includes('Premium') ||
+      v.name.includes('Enhanced') ||
+      v.voiceURI.includes('premium')
+    ) || voices[0];
+
+    utterance.voice = naturalVoice;
   }
 
+  // Apply reverb effect using the word category
+  applyVoiceEffects(utterance, category);
+
   speechSynthesis.speak(utterance);
+}
+
+// Apply reverb and atmospheric effects to voice
+function applyVoiceEffects(utterance, category) {
+  // Add event listeners for voice processing
+  utterance.onstart = () => {
+    if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+  };
+
+  // Simulate reverb by adjusting voice characteristics
+  switch(category) {
+    case 'death':
+    case 'doom':
+    case 'lovecraftian':
+      // Deep, cavernous reverb for dark words
+      utterance.rate *= 0.8; // Slower for more echo-like effect
+      utterance.pitch *= 0.7; // Deeper
+      break;
+
+    case 'religious':
+      // Cathedral-like reverb for religious terms
+      utterance.rate *= 0.9;
+      utterance.pitch *= 0.8;
+      break;
+
+    case 'punk':
+      // Distorted reverb for punk terms
+      utterance.rate *= 1.1;
+      utterance.pitch *= 1.2;
+      break;
+
+    default:
+      // Subtle ambient reverb for other words
+      utterance.rate *= 0.95;
+      break;
+  }
 }
 
 // Get speech parameters based on word category
@@ -563,21 +612,22 @@ function drawVerseBlocks() {
 
   // Draw words individually - each word on its own line
   fill(255);
+  noStroke(); // Remove stroke for better legibility
   textAlign(CENTER, TOP);
-  textSize(fontSize);
+  textSize(fontSize * 1.2); // Slightly larger for better readability
 
   let startY = block.y + 40;
-  let lineHeight = fontSize + 18; // More spacing between lines
+  let lineHeight = (fontSize * 1.2) + 20; // More spacing between lines
   let centerX = block.x + block.width/2;
 
-  // Draw each word on its own line
+  // Draw each word on its own line with clean styling
   for (let i = 0; i < block.words.length; i++) {
     let wordY = startY + (i * lineHeight);
 
     // Stop if we exceed the block height
     if (wordY + lineHeight > block.y + block.height - 30) break;
 
-    // Draw each word centered on its own line
+    // Draw each word centered on its own line with clean text
     text(block.words[i], centerX, wordY);
   }
 
@@ -587,6 +637,12 @@ function drawVerseBlocks() {
 // Add word to verse blocks in lyric mode
 function addToVerseBlock(word) {
   if (!lyricMode || verseBlocks.length === 0) return;
+
+  // Filter out symbols in verse mode - only show actual words
+  let symbols = ["†", "✝", "+", "×", "*", "✦"];
+  if (symbols.includes(word)) {
+    return; // Skip symbols in verse mode
+  }
 
   let currentBlock = verseBlocks[0]; // Single center block
   currentBlock.words.push(word);
