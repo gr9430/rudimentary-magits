@@ -339,20 +339,19 @@ function toggleChantMode() {
 
 function startSpeechSchedule() {
   if (speechEnabled) {
-    // Primary voice - every 8 beats (2 bars)
+    // Primary voice - every 12 beats (3 bars) for less repetition
     speechInterval = setInterval(() => {
       speakWord();
-    }, beatInterval * 8);
+    }, beatInterval * 12);
 
-    // Secondary voice - offset by 4 beats, every 16 beats
-    speechInterval2 = setInterval(() => {
-      speakWord(0.6, 0.4); // Lower pitch, quieter
-    }, beatInterval * 16);
+    // Secondary voice - every 20 beats, offset by 8 beats
+    setTimeout(() => {
+      speechInterval2 = setInterval(() => {
+        speakWord(0.6, 0.5); // Lower pitch, moderate volume
+      }, beatInterval * 20);
+    }, beatInterval * 8); // 8-beat offset
 
-    // Tertiary voice - offset by 12 beats, every 24 beats
-    speechInterval3 = setInterval(() => {
-      speakWord(0.9, 0.3); // Higher rate, quieter
-    }, beatInterval * 24);
+    // Removed third voice to reduce repetition
   }
 }
 
@@ -571,23 +570,29 @@ function drawVerseBlocks() {
   textSize(16);
   text("RUDIMENTARY MAGITS", width/2, block.y - 30);
 
-  // Draw words in flowing verse format
+  // Draw words in verse format - explicit line-by-line drawing
   fill(255);
-  textAlign(CENTER, TOP); // Fixed: TOP alignment for proper line stacking
+  textAlign(LEFT, TOP);
   textSize(fontSize);
 
-  let currentY = block.y + 40;
-  let lineHeight = fontSize + 12; // Increased spacing
-  let wordsPerLine = 4; // Reduced words per line for better readability
-  let currentX = block.x + block.width/2;
+  let startY = block.y + 40;
+  let lineHeight = fontSize + 15;
+  let wordsPerLine = 3;
+  let leftMargin = block.x + 20;
 
+  // Draw each line explicitly
   for (let i = 0; i < block.words.length; i += wordsPerLine) {
-    if (currentY + lineHeight < block.y + block.height - 30) {
-      let lineWords = block.words.slice(i, i + wordsPerLine);
-      let lineText = lineWords.join("  ·  ");
-      text(lineText, currentX, currentY);
-      currentY += lineHeight; // This will now properly stack lines
-    }
+    let currentLineY = startY + (Math.floor(i / wordsPerLine) * lineHeight);
+
+    // Stop if we exceed the block height
+    if (currentLineY + lineHeight > block.y + block.height - 20) break;
+
+    let lineWords = block.words.slice(i, i + wordsPerLine);
+    let lineText = lineWords.join("  ·  ");
+
+    // Center the line within the block
+    textAlign(CENTER, TOP);
+    text(lineText, block.x + block.width/2, currentLineY);
   }
 
   pop();
