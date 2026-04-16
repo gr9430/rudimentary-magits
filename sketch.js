@@ -133,7 +133,12 @@ let speechEnabled = true;
 let lastMouseX, lastMouseY;
 let isMouseHeld = false;
 let speechInterval;
+let speechInterval2; // Secondary voice
+let speechInterval3; // Tertiary voice
 let lastStampedWord = "";
+let lyricMode = false; // New: structured verse block mode
+let verseBlocks = []; // Store verse block data
+let nextBlockIndex = 0;
 
 function preload() {
   song = loadSound('assets/audio/rudimagits.wav');
@@ -146,6 +151,9 @@ function setup() {
   lastMouseX = mouseX;
   lastMouseY = mouseY;
 
+  // Initialize verse blocks for lyric mode
+  initializeVerseBlocks();
+
   // Set up speech synthesis
   if ('speechSynthesis' in window) {
     console.log('Speech synthesis available');
@@ -156,13 +164,15 @@ function setup() {
 }
 
 function draw() {
-  // Main drawing happens in mouseMoved and on quantized clicks
+  // Draw verse blocks if in lyric mode
+  drawVerseBlocks();
+
   // HUD display
   drawHUD();
 }
 
 function mouseMoved() {
-  if (!isMouseHeld) {
+  if (!lyricMode && !isMouseHeld) {
     let distance = dist(mouseX, mouseY, lastMouseX, lastMouseY);
     if (distance >= minDist) {
       stampWord();
@@ -207,37 +217,43 @@ function stampWord() {
     lastStampedWord = word;
   }
 
-  // Color variation - inverted for white on black
-  let brightness;
-  if (random() < 0.8) {
-    brightness = 255; // 80% chance full white
+  if (lyricMode) {
+    // Add to verse blocks
+    addToVerseBlock(word);
   } else {
-    brightness = random(160, 220); // 20% chance light gray
+    // Chaos mode - original behavior
+    // Color variation - inverted for white on black
+    let brightness;
+    if (random() < 0.8) {
+      brightness = 255; // 80% chance full white
+    } else {
+      brightness = random(160, 220); // 20% chance light gray
+    }
+
+    let alpha = random(140, 255);
+
+    // Font size calculation
+    let currentFontSize = fontSize;
+    if (randomMode) {
+      currentFontSize = random(6, 60);
+    } else if (word.length > 10) {
+      currentFontSize *= random(1.0, 2.5);
+    }
+
+    // Drawing setup
+    push();
+    translate(mouseX, mouseY);
+    rotate(random(-PI/4, PI/4));
+
+    fill(brightness, brightness, brightness, alpha);
+    stroke(brightness, brightness, brightness, alpha * 0.6);
+    strokeWeight(0.3);
+    textAlign(CENTER, CENTER);
+    textSize(currentFontSize);
+
+    text(word, 0, 0);
+    pop();
   }
-
-  let alpha = random(140, 255);
-
-  // Font size calculation
-  let currentFontSize = fontSize;
-  if (randomMode) {
-    currentFontSize = random(6, 60);
-  } else if (word.length > 10) {
-    currentFontSize *= random(1.0, 2.5);
-  }
-
-  // Drawing setup
-  push();
-  translate(mouseX, mouseY);
-  rotate(random(-PI/4, PI/4));
-
-  fill(brightness, brightness, brightness, alpha);
-  stroke(brightness, brightness, brightness, alpha * 0.6);
-  strokeWeight(0.3);
-  textAlign(CENTER, CENTER);
-  textSize(currentFontSize);
-
-  text(word, 0, 0);
-  pop();
 }
 
 function keyPressed() {
@@ -262,6 +278,12 @@ function keyPressed() {
     case 'v':
       speechEnabled = !speechEnabled;
       break;
+    case 'l':
+      toggleLyricMode();
+      break;
+    case 's':
+      downloadCanvas();
+      break;
   }
 
   // Handle bracket keys for minDist
@@ -278,6 +300,8 @@ function togglePlayback() {
   if (song.isPlaying()) {
     song.pause();
     clearInterval(speechInterval);
+    clearInterval(speechInterval2);
+    clearInterval(speechInterval3);
   } else {
     song.loop();
     startSpeechSchedule();
@@ -297,31 +321,42 @@ function toggleChantMode() {
 
 function startSpeechSchedule() {
   if (speechEnabled) {
+    // Primary voice - every 8 beats (2 bars)
     speechInterval = setInterval(() => {
       speakWord();
-    }, beatInterval * 8); // Every 8 beats (2 bars)
+    }, beatInterval * 8);
+
+    // Secondary voice - offset by 4 beats, every 16 beats
+    speechInterval2 = setInterval(() => {
+      speakWord(0.6, 0.4); // Lower pitch, quieter
+    }, beatInterval * 16);
+
+    // Tertiary voice - offset by 12 beats, every 24 beats
+    speechInterval3 = setInterval(() => {
+      speakWord(0.9, 0.3); // Higher rate, quieter
+    }, beatInterval * 24);
   }
 }
 
-function speakWord() {
+function speakWord(customRate = 0.8, customVolume = 0.7) {
   if (!speechEnabled || !('speechSynthesis' in window)) return;
 
   let word = random(words);
   let utterance = new SpeechSynthesisUtterance(word);
-  utterance.rate = 0.8;
+  utterance.rate = customRate;
   utterance.pitch = 0.5;
-  utterance.volume = 0.7;
+  utterance.volume = customVolume;
 
   speechSynthesis.speak(utterance);
 }
 
 function drawHUD() {
-  // HUD background
+  // HUD background - expanded height for new controls
   push();
   fill(0, 0, 0, 180);
   stroke(255);
   strokeWeight(1);
-  rect(10, 10, 300, 120);
+  rect(10, 10, 320, 150);
 
   // HUD text
   fill(255);
@@ -351,16 +386,138 @@ function drawHUD() {
   text(`voice: ${voiceStatus}`, 20, y);
   y += lineHeight;
 
+  // Lyric mode
+  let lyricStatus = lyricMode ? "verse blocks" : "chaos";
+  text(`mode: ${lyricStatus}`, 20, y);
+  y += lineHeight;
+
   // Chant mode
   if (chantMode && chantWord) {
     text(`chant: LOCKED — "${chantWord}"`, 20, y);
   } else {
     text(`chant: off`, 20, y);
   }
+  y += lineHeight;
+
+  // Controls
+  text(`L: mode  S: save  H: chant`, 20, y);
 
   pop();
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+  if (lyricMode) {
+    initializeVerseBlocks(); // Recalculate blocks on resize
+  }
+}
+
+// Initialize verse block positions for structured lyric display
+function initializeVerseBlocks() {
+  verseBlocks = [];
+  let blockWidth = width * 0.35;
+  let blockHeight = height * 0.2;
+  let margin = 50;
+
+  // Create 4 verse block areas
+  verseBlocks.push({
+    x: margin,
+    y: margin,
+    width: blockWidth,
+    height: blockHeight,
+    words: [],
+    wordIndex: 0
+  });
+
+  verseBlocks.push({
+    x: width - blockWidth - margin,
+    y: margin,
+    width: blockWidth,
+    height: blockHeight,
+    words: [],
+    wordIndex: 0
+  });
+
+  verseBlocks.push({
+    x: margin,
+    y: height - blockHeight - margin,
+    width: blockWidth,
+    height: blockHeight,
+    words: [],
+    wordIndex: 0
+  });
+
+  verseBlocks.push({
+    x: width - blockWidth - margin,
+    y: height - blockHeight - margin,
+    width: blockWidth,
+    height: blockHeight,
+    words: [],
+    wordIndex: 0
+  });
+
+  nextBlockIndex = 0;
+}
+
+// Toggle between chaos mode and verse block mode
+function toggleLyricMode() {
+  lyricMode = !lyricMode;
+  if (lyricMode) {
+    initializeVerseBlocks();
+    background(0, 0, 0); // Clear canvas for clean verse layout
+  }
+}
+
+// Download canvas as PNG
+function downloadCanvas() {
+  let timestamp = year() + "-" + nf(month(), 2) + "-" + nf(day(), 2) + "_" +
+                  nf(hour(), 2) + "-" + nf(minute(), 2) + "-" + nf(second(), 2);
+  save(`rudimentary-magits_${timestamp}.png`);
+}
+
+// Draw verse blocks when in lyric mode
+function drawVerseBlocks() {
+  if (!lyricMode) return;
+
+  // Draw block outlines
+  push();
+  stroke(255, 255, 255, 100);
+  strokeWeight(1);
+  noFill();
+
+  for (let block of verseBlocks) {
+    rect(block.x, block.y, block.width, block.height);
+  }
+
+  // Draw words in each block
+  fill(255);
+  textAlign(LEFT, TOP);
+  textSize(fontSize);
+
+  for (let block of verseBlocks) {
+    let y = block.y + 20;
+    let lineHeight = fontSize + 5;
+
+    for (let i = 0; i < block.words.length; i++) {
+      if (y + lineHeight < block.y + block.height - 10) {
+        text(block.words[i], block.x + 10, y);
+        y += lineHeight;
+      }
+    }
+  }
+
+  pop();
+}
+
+// Add word to verse blocks in lyric mode
+function addToVerseBlock(word) {
+  if (!lyricMode || verseBlocks.length === 0) return;
+
+  let currentBlock = verseBlocks[nextBlockIndex];
+  currentBlock.words.push(word);
+
+  // Move to next block when current one has enough words
+  if (currentBlock.words.length >= 8) {
+    nextBlockIndex = (nextBlockIndex + 1) % verseBlocks.length;
+  }
 }
