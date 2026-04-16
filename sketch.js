@@ -209,7 +209,7 @@ function mousePressed() {
   // Quantize stamp to next beat
   setTimeout(() => {
     stampWord();
-    speakWord();
+    // Removed speakWord() - let scheduled voices handle speech
     isMouseHeld = false;
   }, timeToNextBeat);
 }
@@ -573,20 +573,20 @@ function drawVerseBlocks() {
 
   // Draw words in flowing verse format
   fill(255);
-  textAlign(CENTER, CENTER);
+  textAlign(CENTER, TOP); // Fixed: TOP alignment for proper line stacking
   textSize(fontSize);
 
-  let currentY = block.y + 30;
-  let lineHeight = fontSize + 10;
-  let wordsPerLine = block.maxWordsPerLine;
+  let currentY = block.y + 40;
+  let lineHeight = fontSize + 12; // Increased spacing
+  let wordsPerLine = 4; // Reduced words per line for better readability
   let currentX = block.x + block.width/2;
 
   for (let i = 0; i < block.words.length; i += wordsPerLine) {
-    if (currentY + lineHeight < block.y + block.height - 20) {
+    if (currentY + lineHeight < block.y + block.height - 30) {
       let lineWords = block.words.slice(i, i + wordsPerLine);
       let lineText = lineWords.join("  ·  ");
       text(lineText, currentX, currentY);
-      currentY += lineHeight;
+      currentY += lineHeight; // This will now properly stack lines
     }
   }
 
