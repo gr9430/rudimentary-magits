@@ -139,6 +139,9 @@ let lastStampedWord = "";
 let lyricMode = false; // New: structured verse block mode
 let verseBlocks = []; // Store verse block data
 let nextBlockIndex = 0;
+let onScreenWords = []; // Track words currently visible on screen
+let audioContext; // Web Audio API context
+let analyser; // Audio analyser for effects
 
 function preload() {
   song = loadSound('assets/audio/rudimagits.wav');
@@ -160,6 +163,15 @@ function setup() {
   } else {
     console.log('Speech synthesis not available');
     speechEnabled = false;
+  }
+
+  // Initialize Web Audio API for voice processing
+  try {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    console.log('Web Audio API available');
+  } catch (e) {
+    console.log('Web Audio API not available:', e);
   }
 }
 
@@ -215,6 +227,12 @@ function stampWord() {
   } else {
     word = random(words);
     lastStampedWord = word;
+  }
+
+  // Track words for voice recitation in both modes
+  onScreenWords.push(word);
+  if (onScreenWords.length > 50) {
+    onScreenWords.shift(); // Keep only recent words
   }
 
   if (lyricMode) {
@@ -341,13 +359,94 @@ function startSpeechSchedule() {
 function speakWord(customRate = 0.8, customVolume = 0.7) {
   if (!speechEnabled || !('speechSynthesis' in window)) return;
 
-  let word = random(words);
+  let word;
+
+  // Use on-screen words in lyric mode, random words in chaos mode
+  if (lyricMode && onScreenWords.length > 0) {
+    // Recite from visible words
+    word = random(onScreenWords.slice(-20)); // Use recent visible words
+  } else {
+    word = random(words);
+  }
+
+  // Apply content-aware speech characteristics
+  let category = categorizeWord(word);
+  let speechParams = getSpeechParams(category);
+
   let utterance = new SpeechSynthesisUtterance(word);
-  utterance.rate = customRate;
-  utterance.pitch = 0.5;
-  utterance.volume = customVolume;
+  utterance.rate = speechParams.rate || customRate;
+  utterance.pitch = speechParams.pitch || 0.5;
+  utterance.volume = speechParams.volume || customVolume;
+
+  // Add voice selection based on category
+  if (speechParams.voice && speechSynthesis.getVoices().length > 0) {
+    let voices = speechSynthesis.getVoices();
+    let selectedVoice = voices.find(v => v.name.includes(speechParams.voice)) || voices[0];
+    utterance.voice = selectedVoice;
+  }
 
   speechSynthesis.speak(utterance);
+}
+
+// Get speech parameters based on word category
+function getSpeechParams(category) {
+  switch(category) {
+    case 'death':
+    case 'doom':
+      return {
+        rate: 0.4,      // Slow, deep
+        pitch: 0.2,     // Low pitch
+        volume: 0.8,    // Louder
+        voice: 'bass'   // Prefer deeper voice
+      };
+
+    case 'symbols':
+      return {
+        rate: 1.2,      // Fast, sharp
+        pitch: 0.8,     // Higher pitch
+        volume: 0.6,    // Sharp but not overwhelming
+        voice: 'default'
+      };
+
+    case 'whisper':
+      return {
+        rate: 0.6,      // Slow whisper
+        pitch: 0.3,     // Low whisper
+        volume: 0.3,    // Quiet
+        voice: 'whisper'
+      };
+
+    case 'religious':
+      return {
+        rate: 0.7,      // Chanted delivery
+        pitch: 0.4,     // Deep, reverent
+        volume: 0.7,
+        voice: 'chant'
+      };
+
+    case 'punk':
+      return {
+        rate: 1.0,      // Aggressive pace
+        pitch: 0.6,     // Mid-range aggression
+        volume: 0.9,    // Loud
+        voice: 'aggressive'
+      };
+
+    case 'lovecraftian':
+      return {
+        rate: 0.5,      // Ominous slow
+        pitch: 0.1,     // Very deep
+        volume: 0.8,    // Commanding presence
+        voice: 'deep'
+      };
+
+    default:
+      return {
+        rate: 0.8,
+        pitch: 0.5,
+        volume: 0.7
+      };
+  }
 }
 
 function drawHUD() {
@@ -415,45 +514,23 @@ function windowResized() {
 // Initialize verse block positions for structured lyric display
 function initializeVerseBlocks() {
   verseBlocks = [];
-  let blockWidth = width * 0.35;
-  let blockHeight = height * 0.2;
-  let margin = 50;
 
-  // Create 4 verse block areas
+  // Single center rectangle for lyrics
+  let blockWidth = width * 0.6;
+  let blockHeight = height * 0.5;
+  let centerX = (width - blockWidth) / 2;
+  let centerY = (height - blockHeight) / 2;
+
   verseBlocks.push({
-    x: margin,
-    y: margin,
+    x: centerX,
+    y: centerY,
     width: blockWidth,
     height: blockHeight,
     words: [],
-    wordIndex: 0
-  });
-
-  verseBlocks.push({
-    x: width - blockWidth - margin,
-    y: margin,
-    width: blockWidth,
-    height: blockHeight,
-    words: [],
-    wordIndex: 0
-  });
-
-  verseBlocks.push({
-    x: margin,
-    y: height - blockHeight - margin,
-    width: blockWidth,
-    height: blockHeight,
-    words: [],
-    wordIndex: 0
-  });
-
-  verseBlocks.push({
-    x: width - blockWidth - margin,
-    y: height - blockHeight - margin,
-    width: blockWidth,
-    height: blockHeight,
-    words: [],
-    wordIndex: 0
+    wordIndex: 0,
+    lineHeight: fontSize + 8,
+    maxWordsPerLine: 6,
+    currentLine: 0
   });
 
   nextBlockIndex = 0;
@@ -477,32 +554,39 @@ function downloadCanvas() {
 
 // Draw verse blocks when in lyric mode
 function drawVerseBlocks() {
-  if (!lyricMode) return;
+  if (!lyricMode || verseBlocks.length === 0) return;
 
-  // Draw block outlines
+  let block = verseBlocks[0]; // Single center block
+
+  // Draw block outline
   push();
-  stroke(255, 255, 255, 100);
-  strokeWeight(1);
+  stroke(255, 255, 255, 80);
+  strokeWeight(2);
   noFill();
+  rect(block.x, block.y, block.width, block.height);
 
-  for (let block of verseBlocks) {
-    rect(block.x, block.y, block.width, block.height);
-  }
-
-  // Draw words in each block
+  // Draw title
   fill(255);
-  textAlign(LEFT, TOP);
+  textAlign(CENTER, TOP);
+  textSize(16);
+  text("RUDIMENTARY MAGITS", width/2, block.y - 30);
+
+  // Draw words in flowing verse format
+  fill(255);
+  textAlign(CENTER, CENTER);
   textSize(fontSize);
 
-  for (let block of verseBlocks) {
-    let y = block.y + 20;
-    let lineHeight = fontSize + 5;
+  let currentY = block.y + 30;
+  let lineHeight = fontSize + 10;
+  let wordsPerLine = block.maxWordsPerLine;
+  let currentX = block.x + block.width/2;
 
-    for (let i = 0; i < block.words.length; i++) {
-      if (y + lineHeight < block.y + block.height - 10) {
-        text(block.words[i], block.x + 10, y);
-        y += lineHeight;
-      }
+  for (let i = 0; i < block.words.length; i += wordsPerLine) {
+    if (currentY + lineHeight < block.y + block.height - 20) {
+      let lineWords = block.words.slice(i, i + wordsPerLine);
+      let lineText = lineWords.join("  ·  ");
+      text(lineText, currentX, currentY);
+      currentY += lineHeight;
     }
   }
 
@@ -513,11 +597,89 @@ function drawVerseBlocks() {
 function addToVerseBlock(word) {
   if (!lyricMode || verseBlocks.length === 0) return;
 
-  let currentBlock = verseBlocks[nextBlockIndex];
+  let currentBlock = verseBlocks[0]; // Single center block
   currentBlock.words.push(word);
 
-  // Move to next block when current one has enough words
-  if (currentBlock.words.length >= 8) {
-    nextBlockIndex = (nextBlockIndex + 1) % verseBlocks.length;
+  // Add to on-screen words list for voice recitation
+  onScreenWords.push(word);
+  if (onScreenWords.length > 50) {
+    onScreenWords.shift(); // Keep only recent words
   }
+
+  // Limit total words in block
+  if (currentBlock.words.length > 60) {
+    currentBlock.words.shift(); // Remove oldest words
+  }
+}
+
+// Word categorization for content-aware speech
+const wordCategories = {
+  symbols: ["†", "✝", "+", "×", "*", "✦"],
+  death: ["death", "dead", "die", "bleed", "mortality", "murdered", "grave", "corpse", "skeleton", "coffin", "burial", "dust", "flesh", "severed", "jugular", "lung", "cancer"],
+  doom: ["pain", "suffer", "void", "decay", "despair", "dismay", "crime", "guilt", "tortured", "empty", "hatred", "hell", "grotesque", "crumbling", "nightmare", "fear", "grief", "tears", "ghost", "insanity", "oblivion", "madness", "sorrow", "anguish", "extinction", "tragedy", "scorn", "futility", "regret", "corruption"],
+  religious: ["god", "pope", "crosses", "crucify", "Vatican't City", "Psychristiatric", "Christisatanic", "Pope Joan", "babies of christ", "wash your mouth out with pope", "pills popes and potions"],
+  punk: ["bullshit", "never gave a fuck", "smash cash smash trash", "revolution", "army", "mohawk", "punkoid", "authority", "destroy", "factory", "warfare state", "thriving on hate"],
+  lovecraftian: ["Lovecraft", "Cthulhu", "Nyarlathotep", "Shoggoth", "Arkham", "Necronomicon", "nightgaunt", "eldritch", "squamous", "rugose", "amorphous", "gibbering", "somnambulistic", "tintinnabulation", "lovecraftian", "mythos", "that is not dead which can eternal lie", "with strange aeons even death may die"]
+};
+
+// Determine word category for content-aware speech
+function categorizeWord(word) {
+  word = word.toLowerCase();
+
+  for (let category in wordCategories) {
+    if (wordCategories[category].some(w => word.includes(w.toLowerCase()))) {
+      return category;
+    }
+  }
+
+  // Check for long phrases
+  if (word.length > 30) return 'whisper';
+  if (word.length > 15) return 'phrase';
+
+  return 'default';
+}
+
+// Web Audio API voice processing effects
+function createVoiceEffects(category) {
+  if (!audioContext) return null;
+
+  let effectChain = {
+    gain: audioContext.createGain(),
+    filter: audioContext.createBiquadFilter(),
+    delay: audioContext.createDelay(),
+    feedback: audioContext.createGain()
+  };
+
+  // Configure effects based on category
+  switch(category) {
+    case 'death':
+    case 'doom':
+      // Low-pass filter for "underground" sound
+      effectChain.filter.type = 'lowpass';
+      effectChain.filter.frequency.setValueAtTime(800, audioContext.currentTime);
+      effectChain.gain.gain.setValueAtTime(1.2, audioContext.currentTime);
+      break;
+
+    case 'punk':
+      // Distortion effect (simulated with waveshaper)
+      effectChain.filter.type = 'bandpass';
+      effectChain.filter.frequency.setValueAtTime(2000, audioContext.currentTime);
+      effectChain.filter.Q.setValueAtTime(10, audioContext.currentTime);
+      break;
+
+    case 'lovecraftian':
+      // Deep reverb/echo
+      effectChain.delay.delayTime.setValueAtTime(0.3, audioContext.currentTime);
+      effectChain.feedback.gain.setValueAtTime(0.4, audioContext.currentTime);
+      break;
+
+    case 'whisper':
+      // Subtle high-pass for ethereal quality
+      effectChain.filter.type = 'highpass';
+      effectChain.filter.frequency.setValueAtTime(300, audioContext.currentTime);
+      effectChain.gain.gain.setValueAtTime(0.5, audioContext.currentTime);
+      break;
+  }
+
+  return effectChain;
 }
