@@ -144,6 +144,12 @@ let audioContext; // Web Audio API context
 let analyser; // Audio analyser for effects
 let chaosWords = []; // Store chaos decoration words in verse mode
 
+// Network graph background
+let networkBuffer;
+let stampsBuffer;
+let nodes = [];
+let edges = [];
+
 function preload() {
   song = loadSound('assets/audio/rudimagits.wav');
 }
@@ -154,6 +160,14 @@ function setup() {
 
   lastMouseX = mouseX;
   lastMouseY = mouseY;
+
+  // Initialize graphics buffers
+  networkBuffer = createGraphics(width, height);
+  stampsBuffer = createGraphics(width, height);
+  stampsBuffer.background(0, 0, 0, 0); // Transparent background for stamps
+
+  // Initialize network graph
+  initializeNetwork();
 
   // Initialize verse blocks for lyric mode
   initializeVerseBlocks();
@@ -177,15 +191,28 @@ function setup() {
 }
 
 function draw() {
-  // Draw verse blocks if in lyric mode
+  // Clear main canvas
+  background(0);
+
+  // Update and render network background
+  updateNetwork();
+  renderNetwork();
+
+  // Draw network buffer to main canvas
+  image(networkBuffer, 0, 0);
+
+  // Draw persistent stamps buffer
+  image(stampsBuffer, 0, 0);
+
+  // Draw verse blocks if in lyric mode (directly to main canvas)
   drawVerseBlocks();
 
-  // Draw chaos decoration around verse container
+  // Draw chaos decoration around verse container (directly to main canvas)
   if (lyricMode) {
     drawChaosDecoration();
   }
 
-  // HUD display
+  // HUD display (directly to main canvas)
   drawHUD();
 }
 
@@ -254,6 +281,9 @@ function stampWord() {
 }
 
 function drawChaosWord(word, x, y) {
+  // Draw to stamps buffer instead of main canvas
+  stampsBuffer.push();
+
   // Color variation - inverted for white on black
   let brightness;
   if (random() < 0.8) {
@@ -273,18 +303,17 @@ function drawChaosWord(word, x, y) {
   }
 
   // Drawing setup
-  push();
-  translate(x, y);
-  rotate(random(-PI/4, PI/4));
+  stampsBuffer.translate(x, y);
+  stampsBuffer.rotate(random(-PI/4, PI/4));
 
-  fill(brightness, brightness, brightness, alpha);
-  stroke(brightness, brightness, brightness, alpha * 0.6);
-  strokeWeight(0.3);
-  textAlign(CENTER, CENTER);
-  textSize(currentFontSize);
+  stampsBuffer.fill(brightness, brightness, brightness, alpha);
+  stampsBuffer.stroke(brightness, brightness, brightness, alpha * 0.6);
+  stampsBuffer.strokeWeight(0.3);
+  stampsBuffer.textAlign(CENTER, CENTER);
+  stampsBuffer.textSize(currentFontSize);
 
-  text(word, 0, 0);
-  pop();
+  stampsBuffer.text(word, 0, 0);
+  stampsBuffer.pop();
 }
 
 // Add chaos decoration outside verse container
@@ -607,6 +636,10 @@ function drawHUD() {
   }
   y += lineHeight;
 
+  // Network status
+  text(`network: on`, 20, y);
+  y += lineHeight;
+
   // Controls
   text(`L: mode  S: save  H: chant`, 20, y);
 
@@ -615,6 +648,21 @@ function drawHUD() {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+
+  // Recreate graphics buffers at new size
+  networkBuffer = createGraphics(width, height);
+  let oldStampsBuffer = stampsBuffer;
+  stampsBuffer = createGraphics(width, height);
+  stampsBuffer.background(0, 0, 0, 0);
+
+  // Copy old stamps to new buffer if it exists
+  if (oldStampsBuffer) {
+    stampsBuffer.image(oldStampsBuffer, 0, 0);
+  }
+
+  // Reinitialize network with proportional positions
+  reinitializeNetworkPositions();
+
   if (lyricMode) {
     initializeVerseBlocks(); // Recalculate blocks on resize
   }
@@ -830,4 +878,288 @@ function createVoiceEffects(category) {
   }
 
   return effectChain;
+}
+
+// ============ NETWORK GRAPH SYSTEM ============
+
+// Network node and cluster definitions
+const clusterData = [
+  {
+    // Cluster 0 — religion/pope
+    words: ["pope", "christ", "blasphemy", "sacrifice", "Vatican't City", "babies of christ", "wash your mouth out with pope", "Pogo Pope", "Army of Jesus", "death love god squad"],
+    songs: ["Blasphemy Squad", "Army Of Jesus", "Sacrifice"],
+    album: "Pope Adrian 37th Psychristiatric"
+  },
+  {
+    // Cluster 1 — asylum/illness
+    words: ["straitjacket", "wheelchair", "schizoid", "punkoid", "devoid", "pills popes and potions", "the depixal dance of death", "Radio Schizo", "B-Ward", "flame of insanity"],
+    songs: ["B-Ward", "Crazy Chain", "The Cloud Song"],
+    album: "Death Church"
+  },
+  {
+    // Cluster 2 — Lovecraft/mythos
+    words: ["Lovecraft", "Cthulhu", "Shoggoth", "Nyarlathotep", "Arkham", "nightgaunt", "eldritch", "squamous", "somnambulistic", "Providence"],
+    songs: ["Nightgaunts", "Arkham Hearse", "Cacophony"],
+    album: "Cacophony"
+  },
+  {
+    // Cluster 3 — political punk
+    words: ["genocide", "slavery", "poppies", "John Lydon", "Joe Strummer", "abbatoir", "grind your bones to make their bombs", "three quarters of the world are starving"],
+    songs: ["Poppycock", "Rotten To The Core", "Dutchmen"],
+    album: "Death Church"
+  },
+  {
+    // Cluster 4 — Magits abstraction
+    words: ["fragment", "disconnect", "conform", "Blitzkrieg Zugzwang", "Avante Garde", "overqualified", "X-ray eyes", "monday is a square box unfortunately locked"],
+    songs: ["Fragmented", "Disconnect", "Disjointed", "Detached"],
+    album: "Magits"
+  },
+  {
+    // Cluster 5 — mortality/void
+    words: ["death", "void", "dust", "grave", "oblivion", "crematorium", "only death", "in a handful of dust", "rehearsal for mortality", "farewell tomorrow"],
+    songs: ["No More Pain", "Only Death", "Annihilation"],
+    album: "No More Pain"
+  }
+];
+
+function initializeNetwork() {
+  nodes = [];
+  edges = [];
+
+  // Create nodes for each cluster
+  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
+    const cluster = clusterData[clusterIndex];
+
+    // Add word nodes
+    cluster.words.forEach(word => {
+      nodes.push({
+        word: word,
+        x: random(40, width - 40),
+        y: random(40, height - 40),
+        vx: random(-0.1, 0.1),
+        vy: random(-0.1, 0.1),
+        size: 6,
+        cluster: clusterIndex,
+        opacity: random(0.12, 0.22),
+        type: 'word'
+      });
+    });
+
+    // Add song nodes
+    cluster.songs.forEach(song => {
+      nodes.push({
+        word: song,
+        x: random(40, width - 40),
+        y: random(40, height - 40),
+        vx: random(-0.1, 0.1),
+        vy: random(-0.1, 0.1),
+        size: 10,
+        cluster: clusterIndex,
+        opacity: random(0.12, 0.22),
+        type: 'song'
+      });
+    });
+
+    // Add album node
+    nodes.push({
+      word: cluster.album,
+      x: random(40, width - 40),
+      y: random(40, height - 40),
+      vx: random(-0.1, 0.1),
+      vy: random(-0.1, 0.1),
+      size: 18,
+      cluster: clusterIndex,
+      opacity: random(0.12, 0.22),
+      type: 'album'
+    });
+  }
+
+  // Create edges between nodes in the same cluster
+  createEdges();
+}
+
+function createEdges() {
+  // For each cluster, connect nodes to 2-4 nearest neighbors within cluster
+  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
+    let clusterNodes = nodes.filter(node => node.cluster === clusterIndex);
+
+    clusterNodes.forEach((node, nodeIndex) => {
+      let distances = [];
+
+      // Calculate distances to other nodes in the same cluster
+      clusterNodes.forEach((otherNode, otherIndex) => {
+        if (nodeIndex !== otherIndex) {
+          let d = dist(node.x, node.y, otherNode.x, otherNode.y);
+          distances.push({
+            distance: d,
+            nodeIndex: nodes.indexOf(node),
+            otherNodeIndex: nodes.indexOf(otherNode)
+          });
+        }
+      });
+
+      // Sort by distance and connect to 2-4 nearest
+      distances.sort((a, b) => a.distance - b.distance);
+      let connectionsToMake = Math.floor(random(2, 5));
+
+      for (let i = 0; i < Math.min(connectionsToMake, distances.length); i++) {
+        let edge = [distances[i].nodeIndex, distances[i].otherNodeIndex];
+
+        // Check if edge already exists
+        let edgeExists = edges.some(existingEdge =>
+          (existingEdge[0] === edge[0] && existingEdge[1] === edge[1]) ||
+          (existingEdge[0] === edge[1] && existingEdge[1] === edge[0])
+        );
+
+        if (!edgeExists) {
+          edges.push(edge);
+        }
+      }
+    });
+  }
+}
+
+function updateNetwork() {
+  // Calculate cluster centroids
+  let clusterCentroids = [];
+  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
+    let clusterNodes = nodes.filter(node => node.cluster === clusterIndex);
+    let centroidX = 0, centroidY = 0;
+
+    clusterNodes.forEach(node => {
+      centroidX += node.x;
+      centroidY += node.y;
+    });
+
+    if (clusterNodes.length > 0) {
+      centroidX /= clusterNodes.length;
+      centroidY /= clusterNodes.length;
+    }
+
+    clusterCentroids.push({x: centroidX, y: centroidY});
+  }
+
+  // Update physics for each node
+  nodes.forEach((node, nodeIndex) => {
+    let forceX = 0, forceY = 0;
+
+    // Spring attraction toward cluster centroid (very weak)
+    let centroid = clusterCentroids[node.cluster];
+    let centroidDx = centroid.x - node.x;
+    let centroidDy = centroid.y - node.y;
+    forceX += centroidDx * 0.0003;
+    forceY += centroidDy * 0.0003;
+
+    // Repulsion between all nodes (inverse square)
+    nodes.forEach((otherNode, otherIndex) => {
+      if (nodeIndex !== otherIndex) {
+        let dx = node.x - otherNode.x;
+        let dy = node.y - otherNode.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance > 0) {
+          let force = 400 / (distance * distance);
+          forceX += (dx / distance) * force;
+          forceY += (dy / distance) * force;
+        }
+      }
+    });
+
+    // Edge spring attraction
+    edges.forEach(edge => {
+      if (edge[0] === nodeIndex) {
+        let otherNode = nodes[edge[1]];
+        let dx = otherNode.x - node.x;
+        let dy = otherNode.y - node.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        let springForce = (distance - 120) * 0.004;
+
+        forceX += (dx / distance) * springForce;
+        forceY += (dy / distance) * springForce;
+      } else if (edge[1] === nodeIndex) {
+        let otherNode = nodes[edge[0]];
+        let dx = otherNode.x - node.x;
+        let dy = otherNode.y - node.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        let springForce = (distance - 120) * 0.004;
+
+        forceX += (dx / distance) * springForce;
+        forceY += (dy / distance) * springForce;
+      }
+    });
+
+    // Apply forces to velocity
+    node.vx += forceX;
+    node.vy += forceY;
+
+    // Velocity damping
+    node.vx *= 0.97;
+    node.vy *= 0.97;
+
+    // Clamp velocity
+    let speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+    if (speed > 0.8) {
+      node.vx = (node.vx / speed) * 0.8;
+      node.vy = (node.vy / speed) * 0.8;
+    }
+
+    // Update position
+    node.x += node.vx;
+    node.y += node.vy;
+
+    // Boundary bounce
+    if (node.x < 40) {
+      node.x = 40;
+      node.vx *= -1;
+    } else if (node.x > width - 40) {
+      node.x = width - 40;
+      node.vx *= -1;
+    }
+
+    if (node.y < 40) {
+      node.y = 40;
+      node.vy *= -1;
+    } else if (node.y > height - 40) {
+      node.y = height - 40;
+      node.vy *= -1;
+    }
+  });
+}
+
+function renderNetwork() {
+  // Clear network buffer
+  networkBuffer.background(0);
+
+  // Draw edges
+  networkBuffer.stroke(255, 255, 255, 255 * 0.08);
+  networkBuffer.strokeWeight(0.3);
+
+  edges.forEach(edge => {
+    let node1 = nodes[edge[0]];
+    let node2 = nodes[edge[1]];
+    networkBuffer.line(node1.x, node1.y, node2.x, node2.y);
+  });
+
+  // Draw nodes
+  networkBuffer.noStroke();
+
+  nodes.forEach(node => {
+    // Draw node circle
+    networkBuffer.fill(255, 255, 255, 255 * node.opacity);
+    networkBuffer.circle(node.x, node.y, node.size);
+
+    // Draw node text (flat, not rotated)
+    networkBuffer.fill(255, 255, 255, 255 * (node.opacity + 0.04));
+    networkBuffer.textAlign(CENTER, CENTER);
+    networkBuffer.textSize(node.size * 0.9);
+    networkBuffer.text(node.word, node.x, node.y);
+  });
+}
+
+function reinitializeNetworkPositions() {
+  // Reinitialize node positions proportionally for window resize
+  nodes.forEach(node => {
+    node.x = constrain(node.x, 40, width - 40);
+    node.y = constrain(node.y, 40, height - 40);
+  });
 }
