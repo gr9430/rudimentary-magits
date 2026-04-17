@@ -142,6 +142,7 @@ let nextBlockIndex = 0;
 let onScreenWords = []; // Track words currently visible on screen
 let audioContext; // Web Audio API context
 let analyser; // Audio analyser for effects
+let chaosWords = []; // Store chaos decoration words in verse mode
 
 function preload() {
   song = loadSound('assets/audio/rudimagits.wav');
@@ -178,6 +179,11 @@ function setup() {
 function draw() {
   // Draw verse blocks if in lyric mode
   drawVerseBlocks();
+
+  // Draw chaos decoration around verse container
+  if (lyricMode) {
+    drawChaosDecoration();
+  }
 
   // HUD display
   drawHUD();
@@ -236,45 +242,114 @@ function stampWord() {
   }
 
   if (lyricMode) {
-    // Add to verse blocks
+    // In verse mode, add to verse blocks AND create chaos decoration
     addToVerseBlock(word);
+    addChaosDecoration(word, mouseX, mouseY);
   } else {
-    // Chaos mode - original behavior
-    // Color variation - inverted for white on black
-    let brightness;
-    if (random() < 0.8) {
-      brightness = 255; // 80% chance full white
-    } else {
-      brightness = random(160, 220); // 20% chance light gray
-    }
-
-    let alpha = random(140, 255);
-
-    // Font size calculation
-    let currentFontSize = fontSize;
-    if (randomMode) {
-      currentFontSize = random(6, 60);
-    } else if (word.length > 10) {
-      currentFontSize *= random(1.0, 2.5);
-    }
-
-    // Drawing setup
-    push();
-    translate(mouseX, mouseY);
-    rotate(random(-PI/4, PI/4));
-
-    fill(brightness, brightness, brightness, alpha);
-    stroke(brightness, brightness, brightness, alpha * 0.6);
-    strokeWeight(0.3);
-    textAlign(CENTER, CENTER);
-    textSize(currentFontSize);
-
-    text(word, 0, 0);
-    pop();
-
-    // Reactive voice for chaos mode too
+    // Pure chaos mode - original behavior
+    drawChaosWord(word, mouseX, mouseY);
+    // Reactive voice for chaos mode
     scheduleWordSpeech(word);
   }
+}
+
+function drawChaosWord(word, x, y) {
+  // Color variation - inverted for white on black
+  let brightness;
+  if (random() < 0.8) {
+    brightness = 255; // 80% chance full white
+  } else {
+    brightness = random(160, 220); // 20% chance light gray
+  }
+
+  let alpha = random(140, 255);
+
+  // Font size calculation
+  let currentFontSize = fontSize;
+  if (randomMode) {
+    currentFontSize = random(6, 60);
+  } else if (word.length > 10) {
+    currentFontSize *= random(1.0, 2.5);
+  }
+
+  // Drawing setup
+  push();
+  translate(x, y);
+  rotate(random(-PI/4, PI/4));
+
+  fill(brightness, brightness, brightness, alpha);
+  stroke(brightness, brightness, brightness, alpha * 0.6);
+  strokeWeight(0.3);
+  textAlign(CENTER, CENTER);
+  textSize(currentFontSize);
+
+  text(word, 0, 0);
+  pop();
+}
+
+// Add chaos decoration outside verse container
+function addChaosDecoration(word, x, y) {
+  if (!lyricMode || verseBlocks.length === 0) return;
+
+  let block = verseBlocks[0];
+
+  // Only add as decoration if position is outside the verse container
+  if (x < block.x || x > block.x + block.width ||
+      y < block.y || y > block.y + block.height) {
+
+    chaosWords.push({
+      word: word,
+      x: x,
+      y: y,
+      rotation: random(-PI/4, PI/4),
+      size: random(8, 16),
+      alpha: random(100, 180),
+      age: 0
+    });
+
+    // Limit chaos words to prevent memory issues
+    if (chaosWords.length > 100) {
+      chaosWords.shift();
+    }
+  }
+}
+
+// Draw chaos decoration around verse container
+function drawChaosDecoration() {
+  if (!lyricMode) return;
+
+  push();
+
+  // Draw each chaos decoration word
+  for (let i = chaosWords.length - 1; i >= 0; i--) {
+    let chaosWord = chaosWords[i];
+
+    // Age the word (fade over time)
+    chaosWord.age += 1;
+    let fadeAlpha = map(chaosWord.age, 0, 300, chaosWord.alpha, 0);
+
+    // Remove old words
+    if (fadeAlpha <= 0) {
+      chaosWords.splice(i, 1);
+      continue;
+    }
+
+    // Draw the chaos word
+    push();
+    translate(chaosWord.x, chaosWord.y);
+    rotate(chaosWord.rotation);
+
+    fill(255, 255, 255, fadeAlpha);
+    stroke(255, 255, 255, fadeAlpha * 0.6);
+    strokeWeight(0.2);
+    textAlign(CENTER, CENTER);
+    textSize(chaosWord.size);
+
+    text(chaosWord.word, 0, 0);
+    pop();
+  }
+
+  pop();
 }
 
 function keyPressed() {
@@ -427,63 +502,58 @@ function applyVoiceEffects(utterance, category) {
   }
 }
 
-// Get speech parameters based on word category
+// Get speech parameters based on word category - all with natural reverb
 function getSpeechParams(category) {
   switch(category) {
     case 'death':
     case 'doom':
       return {
-        rate: 0.4,      // Slow, deep
-        pitch: 0.2,     // Low pitch
-        volume: 0.8,    // Louder
-        voice: 'bass'   // Prefer deeper voice
+        rate: 0.7,      // Slower but not robotic
+        pitch: 0.4,     // Lower but natural
+        volume: 0.6     // Moderate volume
       };
 
     case 'symbols':
       return {
-        rate: 1.2,      // Fast, sharp
-        pitch: 0.8,     // Higher pitch
-        volume: 0.6,    // Sharp but not overwhelming
-        voice: 'default'
+        rate: 0.9,      // Slightly fast but natural
+        pitch: 0.7,     // Higher but not robotic
+        volume: 0.5     // Moderate
       };
 
     case 'whisper':
+    case 'phrase':
       return {
-        rate: 0.6,      // Slow whisper
-        pitch: 0.3,     // Low whisper
-        volume: 0.3,    // Quiet
-        voice: 'whisper'
+        rate: 0.8,      // Natural pace
+        pitch: 0.5,     // Natural pitch
+        volume: 0.4     // Quiet but clear
       };
 
     case 'religious':
       return {
-        rate: 0.7,      // Chanted delivery
-        pitch: 0.4,     // Deep, reverent
-        volume: 0.7,
-        voice: 'chant'
+        rate: 0.8,      // Natural chanted pace
+        pitch: 0.5,     // Natural reverent tone
+        volume: 0.6
       };
 
     case 'punk':
       return {
-        rate: 1.0,      // Aggressive pace
-        pitch: 0.6,     // Mid-range aggression
-        volume: 0.9,    // Loud
-        voice: 'aggressive'
+        rate: 0.9,      // Slightly aggressive but natural
+        pitch: 0.6,     // Mid-range
+        volume: 0.7
       };
 
     case 'lovecraftian':
       return {
-        rate: 0.5,      // Ominous slow
-        pitch: 0.1,     // Very deep
-        volume: 0.8,    // Commanding presence
-        voice: 'deep'
+        rate: 0.7,      // Slow and ominous but natural
+        pitch: 0.4,     // Deep but not robotic
+        volume: 0.6
       };
 
     default:
       return {
-        rate: 0.8,
-        pitch: 0.5,
-        volume: 0.7
+        rate: 0.8,      // Natural default
+        pitch: 0.5,     // Natural pitch
+        volume: 0.6     // Moderate volume
       };
   }
 }
@@ -604,31 +674,37 @@ function drawVerseBlocks() {
   noFill();
   rect(block.x, block.y, block.width, block.height);
 
-  // Draw title
+  // Draw title - clean, single rendering
   fill(255);
+  noStroke(); // Remove stroke for clean title
   textAlign(CENTER, TOP);
-  textSize(16);
-  text("RUDIMENTARY MAGITS", width/2, block.y - 30);
+  textSize(18);
+  text("RUDIMENTARY MAGITS", width/2, block.y - 35);
 
-  // Draw words individually - each word on its own line
+  // Draw words in columns when needed
   fill(255);
   noStroke(); // Remove stroke for better legibility
   textAlign(CENTER, TOP);
-  textSize(fontSize * 1.2); // Slightly larger for better readability
+  textSize(fontSize * 1.1);
 
   let startY = block.y + 40;
-  let lineHeight = (fontSize * 1.2) + 20; // More spacing between lines
-  let centerX = block.x + block.width/2;
+  let lineHeight = (fontSize * 1.1) + 18;
+  let wordsPerColumn = Math.floor((block.height - 80) / lineHeight);
+  let columnWidth = block.width / 3; // Three columns
+  let totalColumns = Math.ceil(block.words.length / wordsPerColumn);
 
-  // Draw each word on its own line with clean styling
+  // Draw words in columns
   for (let i = 0; i < block.words.length; i++) {
-    let wordY = startY + (i * lineHeight);
+    let columnIndex = Math.floor(i / wordsPerColumn);
+    let rowIndex = i % wordsPerColumn;
 
-    // Stop if we exceed the block height
-    if (wordY + lineHeight > block.y + block.height - 30) break;
+    if (columnIndex >= 3) break; // Max 3 columns
 
-    // Draw each word centered on its own line with clean text
-    text(block.words[i], centerX, wordY);
+    let columnX = block.x + (columnIndex * columnWidth) + (columnWidth / 2);
+    let wordY = startY + (rowIndex * lineHeight);
+
+    // Draw each word in its column position
+    text(block.words[i], columnX, wordY);
   }
 
   pop();
