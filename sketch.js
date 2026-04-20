@@ -133,22 +133,19 @@ let speechEnabled = true;
 let lastMouseX, lastMouseY;
 let isMouseHeld = false;
 let speechInterval;
-let speechInterval2; // Secondary voice
-let speechInterval3; // Tertiary voice
+let chantDroningInterval; // For repetitive chant droning
 let lastStampedWord = "";
-let lyricMode = false; // New: structured verse block mode
+let lyricMode = true; // Primary mode: structured verse block mode
 let verseBlocks = []; // Store verse block data
 let nextBlockIndex = 0;
 let onScreenWords = []; // Track words currently visible on screen
 let audioContext; // Web Audio API context
 let analyser; // Audio analyser for effects
 let chaosWords = []; // Store chaos decoration words in verse mode
+let showInitialOverlay = true; // Show explainer on first load
 
-// Network graph background
-let networkBuffer;
+// Stamps buffer for word rendering
 let stampsBuffer;
-let nodes = [];
-let edges = [];
 
 function preload() {
   song = loadSound('assets/audio/rudimagits.wav');
@@ -161,13 +158,9 @@ function setup() {
   lastMouseX = mouseX;
   lastMouseY = mouseY;
 
-  // Initialize graphics buffers
-  networkBuffer = createGraphics(width, height);
+  // Initialize graphics buffer for stamps
   stampsBuffer = createGraphics(width, height);
   stampsBuffer.background(0, 0, 0, 0); // Transparent background for stamps
-
-  // Initialize network graph
-  initializeNetwork();
 
   // Initialize verse blocks for lyric mode
   initializeVerseBlocks();
@@ -194,13 +187,6 @@ function draw() {
   // Clear main canvas
   background(0);
 
-  // Update and render network background
-  updateNetwork();
-  renderNetwork();
-
-  // Draw network buffer to main canvas
-  image(networkBuffer, 0, 0);
-
   // Draw persistent stamps buffer
   image(stampsBuffer, 0, 0);
 
@@ -214,21 +200,44 @@ function draw() {
 
   // HUD display (directly to main canvas)
   drawHUD();
+
+  // Initial overlay
+  if (showInitialOverlay) {
+    drawInitialOverlay();
+  }
 }
 
 function mouseMoved() {
-  if (!lyricMode && !isMouseHeld) {
+  if (!isMouseHeld && song.isPlaying()) { // Require song to be playing
     let distance = dist(mouseX, mouseY, lastMouseX, lastMouseY);
     if (distance >= minDist) {
-      stampWord();
-      lastMouseX = mouseX;
-      lastMouseY = mouseY;
+
+      // Only generate words from mouse movement in chaos mode
+      // In lyric mode, words should only come from clicks, not mouse movement
+      if (!lyricMode) {
+        // In chaos mode, generate words anywhere
+        stampWord();
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
+      }
     }
   }
 }
 
 function mousePressed() {
+  // Only generate words if song is playing and (if in lyric mode) inside verse box
   if (!song.isPlaying()) return;
+
+  if (lyricMode && verseBlocks.length > 0) {
+    let block = verseBlocks[0];
+    let clickInsideVerseBox = (mouseX >= block.x && mouseX <= block.x + block.width &&
+                               mouseY >= block.y && mouseY <= block.y + block.height);
+
+    if (!clickInsideVerseBox) {
+      // Click is outside verse box - don't generate words
+      return;
+    }
+  }
 
   isMouseHeld = true;
 
@@ -250,17 +259,10 @@ function mousePressed() {
 function stampWord() {
   let word;
 
-  if (chantMode && chantWord && chantCounter > 0) {
-    word = chantWord;
-    chantCounter--;
-    if (chantCounter <= 0) {
-      chantMode = false;
-      chantWord = "";
-    }
-  } else {
-    word = random(words);
-    lastStampedWord = word;
-  }
+  // Always generate random words for visual stamping
+  // Chant mode only affects the background voice, not the visual text
+  word = random(words);
+  lastStampedWord = word;
 
   // Track words for voice recitation in both modes
   onScreenWords.push(word);
@@ -269,9 +271,8 @@ function stampWord() {
   }
 
   if (lyricMode) {
-    // In verse mode, add to verse blocks AND create chaos decoration
+    // In verse mode, only add to verse blocks - no chaos decoration outside
     addToVerseBlock(word);
-    addChaosDecoration(word, mouseX, mouseY);
   } else {
     // Pure chaos mode - original behavior
     drawChaosWord(word, mouseX, mouseY);
@@ -424,10 +425,22 @@ function keyPressed() {
 function togglePlayback() {
   if (song.isPlaying()) {
     song.pause();
-    // No more scheduled intervals to clear - voice is now reactive
+    // Stop chant droning when music stops
+    stopChantDroning();
   } else {
-    song.loop();
+    song.play(); // Single play, no loop
     startSpeechSchedule(); // Just logs that reactive voice is active
+    // Hide initial overlay once user starts the experience
+    showInitialOverlay = false;
+    // Restart chant droning if in chant mode
+    if (chantMode && chantWord) {
+      startChantDroning();
+    }
+
+    // Add event listener to stop chanting when song ends
+    song.onended(() => {
+      stopChantDroning();
+    });
   }
 }
 
@@ -435,11 +448,85 @@ function toggleChantMode() {
   chantMode = !chantMode;
   if (chantMode && lastStampedWord) {
     chantWord = lastStampedWord;
-    chantCounter = 8; // Repeat for 8 beats
+    // No counter - chant will loop continuously until manually turned off
+
+    // Start persistent droning voice for chant mode
+    startChantDroning();
   } else {
     chantWord = "";
-    chantCounter = 0;
+
+    // Stop droning voice
+    stopChantDroning();
   }
+}
+
+function startChantDroning() {
+  if (!speechEnabled || !chantWord) return;
+
+  // Clear any existing droning interval
+  if (chantDroningInterval) {
+    clearInterval(chantDroningInterval);
+  }
+
+  // Start repetitive droning every 8 beats (more spaced for layering)
+  chantDroningInterval = setInterval(() => {
+    if (chantMode && chantWord) {
+      speakChantWord();
+    } else {
+      stopChantDroning();
+    }
+  }, beatInterval * 4); // Every 4 beats for more frequent droning
+
+  // Speak immediately when chant starts
+  speakChantWord();
+}
+
+function stopChantDroning() {
+  if (chantDroningInterval) {
+    clearInterval(chantDroningInterval);
+    chantDroningInterval = null;
+  }
+}
+
+function speakChantWord() {
+  if (!speechEnabled || !('speechSynthesis' in window) || !chantWord) return;
+
+  let utterance = new SpeechSynthesisUtterance(chantWord);
+
+  // Faster, quieter chant voice to allow layering with other speech
+  utterance.rate = 0.8;      // Faster to finish quickly
+  utterance.pitch = 0.3;     // Deep, resonant drone
+  utterance.volume = 0.5;    // Quieter to not overpower other speech
+
+  // Select natural voice
+  if (speechSynthesis.getVoices().length > 0) {
+    let voices = speechSynthesis.getVoices();
+    let naturalVoice = voices.find(v =>
+      v.name.includes('Natural') ||
+      v.name.includes('Premium') ||
+      v.name.includes('Enhanced') ||
+      v.voiceURI.includes('premium')
+    ) || voices[0];
+    utterance.voice = naturalVoice;
+  }
+
+  // Apply enhanced reverb for droning effect
+  applyChantVoiceEffects(utterance);
+
+  speechSynthesis.speak(utterance);
+}
+
+function applyChantVoiceEffects(utterance) {
+  // Even deeper cathedral reverb for chant droning
+  utterance.onstart = () => {
+    if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+  };
+
+  // More pronounced reverb for hypnotic droning
+  utterance.rate *= 0.8;   // Even slower
+  utterance.pitch *= 0.7;  // Even deeper
 }
 
 function startSpeechSchedule() {
@@ -463,38 +550,33 @@ function speakWord(customRate = 0.8, customVolume = 0.7, specificWord = null) {
     word = random(words);
   }
 
-  // Apply content-aware speech characteristics with more natural settings
-  let category = categorizeWord(word);
-  let speechParams = getSpeechParams(category);
-
   let utterance = new SpeechSynthesisUtterance(word);
-  utterance.rate = speechParams.rate || customRate;
-  utterance.pitch = speechParams.pitch || 0.5;
-  utterance.volume = (speechParams.volume || customVolume) * 0.8; // Reduce overall volume
 
-  // Select more natural voices and add reverb effect
+  // Church-like voice characteristics - single consistent voice
+  utterance.rate = 0.7;      // Slower, more ceremonial pace
+  utterance.pitch = 0.4;     // Lower, more resonant
+  utterance.volume = 0.6;    // Moderate, reverent volume
+
+  // Select natural-sounding voice
   if (speechSynthesis.getVoices().length > 0) {
     let voices = speechSynthesis.getVoices();
-
-    // Prefer more natural-sounding voices
     let naturalVoice = voices.find(v =>
       v.name.includes('Natural') ||
       v.name.includes('Premium') ||
       v.name.includes('Enhanced') ||
       v.voiceURI.includes('premium')
     ) || voices[0];
-
     utterance.voice = naturalVoice;
   }
 
-  // Apply reverb effect using the word category
-  applyVoiceEffects(utterance, category);
+  // Apply church-like reverb effects
+  applyChurchVoiceEffects(utterance);
 
   speechSynthesis.speak(utterance);
 }
 
-// Apply reverb and atmospheric effects to voice
-function applyVoiceEffects(utterance, category) {
+// Apply church-like reverb and atmospheric effects to voice
+function applyChurchVoiceEffects(utterance) {
   // Add event listeners for voice processing
   utterance.onstart = () => {
     if (audioContext && audioContext.state === 'suspended') {
@@ -502,90 +584,12 @@ function applyVoiceEffects(utterance, category) {
     }
   };
 
-  // Simulate reverb by adjusting voice characteristics
-  switch(category) {
-    case 'death':
-    case 'doom':
-    case 'lovecraftian':
-      // Deep, cavernous reverb for dark words
-      utterance.rate *= 0.8; // Slower for more echo-like effect
-      utterance.pitch *= 0.7; // Deeper
-      break;
-
-    case 'religious':
-      // Cathedral-like reverb for religious terms
-      utterance.rate *= 0.9;
-      utterance.pitch *= 0.8;
-      break;
-
-    case 'punk':
-      // Distorted reverb for punk terms
-      utterance.rate *= 1.1;
-      utterance.pitch *= 1.2;
-      break;
-
-    default:
-      // Subtle ambient reverb for other words
-      utterance.rate *= 0.95;
-      break;
-  }
+  // Cathedral-like reverb characteristics - consistent for all words
+  // Slightly slower and deeper for reverberant church quality
+  utterance.rate *= 0.9;
+  utterance.pitch *= 0.8;
 }
 
-// Get speech parameters based on word category - all with natural reverb
-function getSpeechParams(category) {
-  switch(category) {
-    case 'death':
-    case 'doom':
-      return {
-        rate: 0.7,      // Slower but not robotic
-        pitch: 0.4,     // Lower but natural
-        volume: 0.6     // Moderate volume
-      };
-
-    case 'symbols':
-      return {
-        rate: 0.9,      // Slightly fast but natural
-        pitch: 0.7,     // Higher but not robotic
-        volume: 0.5     // Moderate
-      };
-
-    case 'whisper':
-    case 'phrase':
-      return {
-        rate: 0.8,      // Natural pace
-        pitch: 0.5,     // Natural pitch
-        volume: 0.4     // Quiet but clear
-      };
-
-    case 'religious':
-      return {
-        rate: 0.8,      // Natural chanted pace
-        pitch: 0.5,     // Natural reverent tone
-        volume: 0.6
-      };
-
-    case 'punk':
-      return {
-        rate: 0.9,      // Slightly aggressive but natural
-        pitch: 0.6,     // Mid-range
-        volume: 0.7
-      };
-
-    case 'lovecraftian':
-      return {
-        rate: 0.7,      // Slow and ominous but natural
-        pitch: 0.4,     // Deep but not robotic
-        volume: 0.6
-      };
-
-    default:
-      return {
-        rate: 0.8,      // Natural default
-        pitch: 0.5,     // Natural pitch
-        volume: 0.6     // Moderate volume
-      };
-  }
-}
 
 function drawHUD() {
   // HUD background - expanded height for new controls
@@ -593,7 +597,7 @@ function drawHUD() {
   fill(0, 0, 0, 180);
   stroke(255);
   strokeWeight(1);
-  rect(10, 10, 320, 150);
+  rect(10, 10, 450, 150); // Wider to accommodate longer text
 
   // HUD text
   fill(255);
@@ -628,11 +632,11 @@ function drawHUD() {
   text(`mode: ${lyricStatus}`, 20, y);
   y += lineHeight;
 
-  // Chant mode
+  // Chant mode with better explanation
   if (chantMode && chantWord) {
-    text(`chant: LOCKED — "${chantWord}"`, 20, y);
+    text(`chant: DRONING — "${chantWord}" (continuous loop)`, 20, y);
   } else {
-    text(`chant: off`, 20, y);
+    text(`chant: off (H: lock last word for repetitive droning)`, 20, y);
   }
   y += lineHeight;
 
@@ -646,11 +650,38 @@ function drawHUD() {
   pop();
 }
 
+function drawInitialOverlay() {
+  // Semi-transparent background
+  push();
+  fill(0, 0, 0, 200);
+  rect(0, 0, width, height);
+
+  // Central explanatory text
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textFont('serif');
+
+  // Title
+  textSize(32);
+  text("RUDIMENTARY MAGITS", width/2, height/2 - 80);
+
+  // Subtitle
+  textSize(18);
+  text("Interactive Poetry Experience", width/2, height/2 - 40);
+
+  // Instructions
+  textSize(14);
+  text("Press SPACEBAR to begin the lyrical exploration", width/2, height/2 + 20);
+  text("Move your mouse to interact with the verse blocks", width/2, height/2 + 40);
+  text("Based on the works of Rudimentary Peni and Magits", width/2, height/2 + 80);
+
+  pop();
+}
+
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
 
-  // Recreate graphics buffers at new size
-  networkBuffer = createGraphics(width, height);
+  // Recreate stamps buffer at new size
   let oldStampsBuffer = stampsBuffer;
   stampsBuffer = createGraphics(width, height);
   stampsBuffer.background(0, 0, 0, 0);
@@ -659,9 +690,6 @@ function windowResized() {
   if (oldStampsBuffer) {
     stampsBuffer.image(oldStampsBuffer, 0, 0);
   }
-
-  // Reinitialize network with proportional positions
-  reinitializeNetworkPositions();
 
   if (lyricMode) {
     initializeVerseBlocks(); // Recalculate blocks on resize
@@ -672,9 +700,9 @@ function windowResized() {
 function initializeVerseBlocks() {
   verseBlocks = [];
 
-  // Single center rectangle for lyrics
-  let blockWidth = width * 0.6;
-  let blockHeight = height * 0.5;
+  // Single center rectangle for lyrics - portrait orientation
+  let blockWidth = width * 0.4;   // Narrower for portrait
+  let blockHeight = height * 0.7;  // Taller for portrait
   let centerX = (width - blockWidth) / 2;
   let centerY = (height - blockHeight) / 2;
 
@@ -715,8 +743,15 @@ function drawVerseBlocks() {
 
   let block = verseBlocks[0]; // Single center block
 
-  // Draw block outline
+  // Draw verse block with pure black background
   push();
+
+  // Pure black background - nodes float around it due to physics
+  fill(0, 0, 0, 255);
+  noStroke();
+  rect(block.x, block.y, block.width, block.height);
+
+  // Block outline
   stroke(255, 255, 255, 80);
   strokeWeight(2);
   noFill();
@@ -729,30 +764,73 @@ function drawVerseBlocks() {
   textSize(18);
   text("RUDIMENTARY MAGITS", width/2, block.y - 35);
 
-  // Draw words in columns when needed
+  // Draw words with proper text wrapping
   fill(255);
   noStroke(); // Remove stroke for better legibility
-  textAlign(CENTER, TOP);
+  textAlign(LEFT, TOP);
   textSize(fontSize * 1.1);
 
   let startY = block.y + 40;
-  let lineHeight = (fontSize * 1.1) + 18;
-  let wordsPerColumn = Math.floor((block.height - 80) / lineHeight);
+  let lineHeight = (fontSize * 1.1) + 8;
   let columnWidth = block.width / 3; // Three columns
-  let totalColumns = Math.ceil(block.words.length / wordsPerColumn);
+  let columnPadding = 20; // Increased by 5px to prevent text overflow
+  let availableColumnWidth = columnWidth - (columnPadding * 2);
 
-  // Draw words in columns
-  for (let i = 0; i < block.words.length; i++) {
-    let columnIndex = Math.floor(i / wordsPerColumn);
-    let rowIndex = i % wordsPerColumn;
+  let currentColumn = 0;
+  let currentY = startY;
+  let maxY = block.y + block.height - 20; // Leave some bottom padding
 
-    if (columnIndex >= 3) break; // Max 3 columns
+  // Process each word with wrapping
+  for (let i = 0; i < block.words.length && currentColumn < 3; i++) {
+    let word = block.words[i];
+    let wordWidth = textWidth(word);
 
-    let columnX = block.x + (columnIndex * columnWidth) + (columnWidth / 2);
-    let wordY = startY + (rowIndex * lineHeight);
+    // Check if word needs to wrap to multiple lines
+    if (wordWidth > availableColumnWidth) {
+      // Split long phrases into multiple lines
+      let words = word.split(' ');
+      let currentLine = '';
 
-    // Draw each word in its column position
-    text(block.words[i], columnX, wordY);
+      for (let w of words) {
+        let testLine = currentLine + (currentLine ? ' ' : '') + w;
+        if (textWidth(testLine) <= availableColumnWidth) {
+          currentLine = testLine;
+        } else {
+          // Draw current line and start new line
+          if (currentLine) {
+            let columnX = block.x + (currentColumn * columnWidth) + columnPadding;
+            text(currentLine, columnX, currentY);
+            currentY += lineHeight;
+
+            // Check if we need to move to next column
+            if (currentY > maxY) {
+              currentColumn++;
+              currentY = startY;
+            }
+          }
+          currentLine = w;
+        }
+      }
+
+      // Draw remaining line
+      if (currentLine && currentColumn < 3) {
+        let columnX = block.x + (currentColumn * columnWidth) + columnPadding;
+        text(currentLine, columnX, currentY);
+        currentY += lineHeight;
+      }
+    } else {
+      // Single word fits in column width
+      let columnX = block.x + (currentColumn * columnWidth) + columnPadding;
+      text(word, columnX, currentY);
+      currentY += lineHeight;
+    }
+
+    // Check if we need to move to next column
+    if (currentY > maxY) {
+      currentColumn++;
+      currentY = startY;
+      if (currentColumn >= 3) break; // Stop if we've filled all 3 columns
+    }
   }
 
   pop();
@@ -777,9 +855,9 @@ function addToVerseBlock(word) {
     onScreenWords.shift(); // Keep only recent words
   }
 
-  // Limit total words in block
-  if (currentBlock.words.length > 20) {
-    currentBlock.words.shift(); // Remove oldest words
+  // Limit total words in block - allow 3 full columns before removal
+  if (currentBlock.words.length > 75) { // Enough for ~25 words per column × 3 columns
+    currentBlock.words.shift(); // Remove oldest words only after 3 columns are full
   }
 
   // Reactive voice - speak this word on the next beat
@@ -808,32 +886,6 @@ function scheduleWordSpeech(word) {
   }, timeToNextBeat);
 }
 
-// Word categorization for content-aware speech
-const wordCategories = {
-  symbols: ["†", "✝", "+", "×", "*", "✦"],
-  death: ["death", "dead", "die", "bleed", "mortality", "murdered", "grave", "corpse", "skeleton", "coffin", "burial", "dust", "flesh", "severed", "jugular", "lung", "cancer"],
-  doom: ["pain", "suffer", "void", "decay", "despair", "dismay", "crime", "guilt", "tortured", "empty", "hatred", "hell", "grotesque", "crumbling", "nightmare", "fear", "grief", "tears", "ghost", "insanity", "oblivion", "madness", "sorrow", "anguish", "extinction", "tragedy", "scorn", "futility", "regret", "corruption"],
-  religious: ["god", "pope", "crosses", "crucify", "Vatican't City", "Psychristiatric", "Christisatanic", "Pope Joan", "babies of christ", "wash your mouth out with pope", "pills popes and potions"],
-  punk: ["bullshit", "never gave a fuck", "smash cash smash trash", "revolution", "army", "mohawk", "punkoid", "authority", "destroy", "factory", "warfare state", "thriving on hate"],
-  lovecraftian: ["Lovecraft", "Cthulhu", "Nyarlathotep", "Shoggoth", "Arkham", "Necronomicon", "nightgaunt", "eldritch", "squamous", "rugose", "amorphous", "gibbering", "somnambulistic", "tintinnabulation", "lovecraftian", "mythos", "that is not dead which can eternal lie", "with strange aeons even death may die"]
-};
-
-// Determine word category for content-aware speech
-function categorizeWord(word) {
-  word = word.toLowerCase();
-
-  for (let category in wordCategories) {
-    if (wordCategories[category].some(w => word.includes(w.toLowerCase()))) {
-      return category;
-    }
-  }
-
-  // Check for long phrases
-  if (word.length > 30) return 'whisper';
-  if (word.length > 15) return 'phrase';
-
-  return 'default';
-}
 
 // Web Audio API voice processing effects
 function createVoiceEffects(category) {
@@ -880,286 +932,4 @@ function createVoiceEffects(category) {
   return effectChain;
 }
 
-// ============ NETWORK GRAPH SYSTEM ============
-
-// Network node and cluster definitions
-const clusterData = [
-  {
-    // Cluster 0 — religion/pope
-    words: ["pope", "christ", "blasphemy", "sacrifice", "Vatican't City", "babies of christ", "wash your mouth out with pope", "Pogo Pope", "Army of Jesus", "death love god squad"],
-    songs: ["Blasphemy Squad", "Army Of Jesus", "Sacrifice"],
-    album: "Pope Adrian 37th Psychristiatric"
-  },
-  {
-    // Cluster 1 — asylum/illness
-    words: ["straitjacket", "wheelchair", "schizoid", "punkoid", "devoid", "pills popes and potions", "the depixal dance of death", "Radio Schizo", "B-Ward", "flame of insanity"],
-    songs: ["B-Ward", "Crazy Chain", "The Cloud Song"],
-    album: "Death Church"
-  },
-  {
-    // Cluster 2 — Lovecraft/mythos
-    words: ["Lovecraft", "Cthulhu", "Shoggoth", "Nyarlathotep", "Arkham", "nightgaunt", "eldritch", "squamous", "somnambulistic", "Providence"],
-    songs: ["Nightgaunts", "Arkham Hearse", "Cacophony"],
-    album: "Cacophony"
-  },
-  {
-    // Cluster 3 — political punk
-    words: ["genocide", "slavery", "poppies", "John Lydon", "Joe Strummer", "abbatoir", "grind your bones to make their bombs", "three quarters of the world are starving"],
-    songs: ["Poppycock", "Rotten To The Core", "Dutchmen"],
-    album: "Death Church"
-  },
-  {
-    // Cluster 4 — Magits abstraction
-    words: ["fragment", "disconnect", "conform", "Blitzkrieg Zugzwang", "Avante Garde", "overqualified", "X-ray eyes", "monday is a square box unfortunately locked"],
-    songs: ["Fragmented", "Disconnect", "Disjointed", "Detached"],
-    album: "Magits"
-  },
-  {
-    // Cluster 5 — mortality/void
-    words: ["death", "void", "dust", "grave", "oblivion", "crematorium", "only death", "in a handful of dust", "rehearsal for mortality", "farewell tomorrow"],
-    songs: ["No More Pain", "Only Death", "Annihilation"],
-    album: "No More Pain"
-  }
-];
-
-function initializeNetwork() {
-  nodes = [];
-  edges = [];
-
-  // Create nodes for each cluster
-  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
-    const cluster = clusterData[clusterIndex];
-
-    // Add word nodes
-    cluster.words.forEach(word => {
-      nodes.push({
-        word: word,
-        x: random(40, width - 40),
-        y: random(40, height - 40),
-        vx: random(-0.1, 0.1),
-        vy: random(-0.1, 0.1),
-        size: 6,
-        cluster: clusterIndex,
-        opacity: random(0.12, 0.22),
-        type: 'word'
-      });
-    });
-
-    // Add song nodes
-    cluster.songs.forEach(song => {
-      nodes.push({
-        word: song,
-        x: random(40, width - 40),
-        y: random(40, height - 40),
-        vx: random(-0.1, 0.1),
-        vy: random(-0.1, 0.1),
-        size: 10,
-        cluster: clusterIndex,
-        opacity: random(0.12, 0.22),
-        type: 'song'
-      });
-    });
-
-    // Add album node
-    nodes.push({
-      word: cluster.album,
-      x: random(40, width - 40),
-      y: random(40, height - 40),
-      vx: random(-0.1, 0.1),
-      vy: random(-0.1, 0.1),
-      size: 18,
-      cluster: clusterIndex,
-      opacity: random(0.12, 0.22),
-      type: 'album'
-    });
-  }
-
-  // Create edges between nodes in the same cluster
-  createEdges();
-}
-
-function createEdges() {
-  // For each cluster, connect nodes to 2-4 nearest neighbors within cluster
-  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
-    let clusterNodes = nodes.filter(node => node.cluster === clusterIndex);
-
-    clusterNodes.forEach((node, nodeIndex) => {
-      let distances = [];
-
-      // Calculate distances to other nodes in the same cluster
-      clusterNodes.forEach((otherNode, otherIndex) => {
-        if (nodeIndex !== otherIndex) {
-          let d = dist(node.x, node.y, otherNode.x, otherNode.y);
-          distances.push({
-            distance: d,
-            nodeIndex: nodes.indexOf(node),
-            otherNodeIndex: nodes.indexOf(otherNode)
-          });
-        }
-      });
-
-      // Sort by distance and connect to 2-4 nearest
-      distances.sort((a, b) => a.distance - b.distance);
-      let connectionsToMake = Math.floor(random(2, 5));
-
-      for (let i = 0; i < Math.min(connectionsToMake, distances.length); i++) {
-        let edge = [distances[i].nodeIndex, distances[i].otherNodeIndex];
-
-        // Check if edge already exists
-        let edgeExists = edges.some(existingEdge =>
-          (existingEdge[0] === edge[0] && existingEdge[1] === edge[1]) ||
-          (existingEdge[0] === edge[1] && existingEdge[1] === edge[0])
-        );
-
-        if (!edgeExists) {
-          edges.push(edge);
-        }
-      }
-    });
-  }
-}
-
-function updateNetwork() {
-  // Calculate cluster centroids
-  let clusterCentroids = [];
-  for (let clusterIndex = 0; clusterIndex < clusterData.length; clusterIndex++) {
-    let clusterNodes = nodes.filter(node => node.cluster === clusterIndex);
-    let centroidX = 0, centroidY = 0;
-
-    clusterNodes.forEach(node => {
-      centroidX += node.x;
-      centroidY += node.y;
-    });
-
-    if (clusterNodes.length > 0) {
-      centroidX /= clusterNodes.length;
-      centroidY /= clusterNodes.length;
-    }
-
-    clusterCentroids.push({x: centroidX, y: centroidY});
-  }
-
-  // Update physics for each node
-  nodes.forEach((node, nodeIndex) => {
-    let forceX = 0, forceY = 0;
-
-    // Spring attraction toward cluster centroid (very weak)
-    let centroid = clusterCentroids[node.cluster];
-    let centroidDx = centroid.x - node.x;
-    let centroidDy = centroid.y - node.y;
-    forceX += centroidDx * 0.0003;
-    forceY += centroidDy * 0.0003;
-
-    // Repulsion between all nodes (inverse square)
-    nodes.forEach((otherNode, otherIndex) => {
-      if (nodeIndex !== otherIndex) {
-        let dx = node.x - otherNode.x;
-        let dy = node.y - otherNode.y;
-        let distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance > 0) {
-          let force = 400 / (distance * distance);
-          forceX += (dx / distance) * force;
-          forceY += (dy / distance) * force;
-        }
-      }
-    });
-
-    // Edge spring attraction
-    edges.forEach(edge => {
-      if (edge[0] === nodeIndex) {
-        let otherNode = nodes[edge[1]];
-        let dx = otherNode.x - node.x;
-        let dy = otherNode.y - node.y;
-        let distance = Math.sqrt(dx * dx + dy * dy);
-        let springForce = (distance - 120) * 0.004;
-
-        forceX += (dx / distance) * springForce;
-        forceY += (dy / distance) * springForce;
-      } else if (edge[1] === nodeIndex) {
-        let otherNode = nodes[edge[0]];
-        let dx = otherNode.x - node.x;
-        let dy = otherNode.y - node.y;
-        let distance = Math.sqrt(dx * dx + dy * dy);
-        let springForce = (distance - 120) * 0.004;
-
-        forceX += (dx / distance) * springForce;
-        forceY += (dy / distance) * springForce;
-      }
-    });
-
-    // Apply forces to velocity
-    node.vx += forceX;
-    node.vy += forceY;
-
-    // Velocity damping
-    node.vx *= 0.97;
-    node.vy *= 0.97;
-
-    // Clamp velocity
-    let speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-    if (speed > 0.8) {
-      node.vx = (node.vx / speed) * 0.8;
-      node.vy = (node.vy / speed) * 0.8;
-    }
-
-    // Update position
-    node.x += node.vx;
-    node.y += node.vy;
-
-    // Boundary bounce
-    if (node.x < 40) {
-      node.x = 40;
-      node.vx *= -1;
-    } else if (node.x > width - 40) {
-      node.x = width - 40;
-      node.vx *= -1;
-    }
-
-    if (node.y < 40) {
-      node.y = 40;
-      node.vy *= -1;
-    } else if (node.y > height - 40) {
-      node.y = height - 40;
-      node.vy *= -1;
-    }
-  });
-}
-
-function renderNetwork() {
-  // Clear network buffer
-  networkBuffer.background(0);
-
-  // Draw edges
-  networkBuffer.stroke(255, 255, 255, 255 * 0.08);
-  networkBuffer.strokeWeight(0.3);
-
-  edges.forEach(edge => {
-    let node1 = nodes[edge[0]];
-    let node2 = nodes[edge[1]];
-    networkBuffer.line(node1.x, node1.y, node2.x, node2.y);
-  });
-
-  // Draw nodes
-  networkBuffer.noStroke();
-
-  nodes.forEach(node => {
-    // Draw node circle
-    networkBuffer.fill(255, 255, 255, 255 * node.opacity);
-    networkBuffer.circle(node.x, node.y, node.size);
-
-    // Draw node text (flat, not rotated)
-    networkBuffer.fill(255, 255, 255, 255 * (node.opacity + 0.04));
-    networkBuffer.textAlign(CENTER, CENTER);
-    networkBuffer.textSize(node.size * 0.9);
-    networkBuffer.text(node.word, node.x, node.y);
-  });
-}
-
-function reinitializeNetworkPositions() {
-  // Reinitialize node positions proportionally for window resize
-  nodes.forEach(node => {
-    node.x = constrain(node.x, 40, width - 40);
-    node.y = constrain(node.y, 40, height - 40);
-  });
-}
+// Network visualization removed - focusing on core functionality
